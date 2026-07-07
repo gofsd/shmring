@@ -1,0 +1,6 @@
+/bin/
+*.test
+*.out
+coverage.txt
+/web/example/shmring.wasm
+/web/e2e/node_modules/

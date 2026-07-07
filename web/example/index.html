@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>shmring web example</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+  #log { white-space: pre-wrap; background: #111; color: #0f0; padding: 1rem; border-radius: 6px; min-height: 8rem; }
+  #status { font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>shmring web example</h1>
+<p>Main thread creates the ring buffer (Writer) and sends numbered messages.
+A Web Worker opens the same <code>SharedArrayBuffer</code> (Reader) and reports each one back.</p>
+<p id="status">loading…</p>
+<pre id="log"></pre>
+
+<script type="module">
+import { loadShmring, createWriter } from "../shmring.js";
+
+const statusEl = document.getElementById("status");
+const logEl = document.getElementById("log");
+function log(line) {
+  logEl.textContent += line + "\n";
+}
+
+if (!crossOriginIsolated) {
+  statusEl.textContent = "crossOriginIsolated is false — SharedArrayBuffer unavailable. Serve via serve.go (sets COOP/COEP headers).";
+  throw new Error("not cross-origin isolated");
+}
+
+const CAPACITY = 4096;
+const COUNT = 10;
+
+const raw = await loadShmring("shmring.wasm");
+const { writer, sab } = createWriter(raw, CAPACITY);
+
+const worker = new Worker("worker.js", { type: "module" });
+worker.postMessage({ sab, capacity: CAPACITY });
+worker.onmessage = (e) => {
+  if (e.data.type === "message") {
+    log(`worker received: ${JSON.stringify(e.data.text)}`);
+  } else if (e.data.type === "done") {
+    statusEl.textContent = "done";
+    log("worker observed EOF, closing.");
+  }
+};
+worker.onerror = (e) => log(`worker error: ${e.message}`);
+
+statusEl.textContent = "running";
+const encoder = new TextEncoder();
+for (let i = 0; i < COUNT; i++) {
+  const msg = `message ${i}\n`;
+  await writer.write(encoder.encode(msg));
+  log(`sent: ${JSON.stringify(msg.trimEnd())}`);
+  await new Promise((r) => setTimeout(r, 150));
+}
+writer.close();
+</script>
+</body>
+</html>

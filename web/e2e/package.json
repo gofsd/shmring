@@ -1,0 +1,12 @@
+{
+  "name": "shmring-web-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Headless-browser check that web/example actually shares data between the main thread and a Worker via SharedArrayBuffer.",
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}
