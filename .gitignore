@@ -4,3 +4,7 @@
 coverage.txt
 /web/example/shmring.wasm
 /web/e2e/node_modules/
+/npm/shmring.js
+/npm/wasm_exec.js
+/npm/shmring.wasm
+/npm/node_modules/

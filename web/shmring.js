@@ -11,10 +11,18 @@
 import "./wasm_exec.js"; // side effect: defines globalThis.Go
 
 /**
+ * URL of the shmring.wasm binary bundled alongside this module. Bundlers
+ * (Vite, webpack, etc.) that understand `new URL(..., import.meta.url)`
+ * asset references will resolve and copy it automatically; otherwise pass
+ * your own URL/path to loadShmring instead of this one.
+ */
+export const wasmURL = new URL("./shmring.wasm", import.meta.url);
+
+/**
  * Instantiates shmring.wasm and returns the raw globalThis.shmring
  * bindings it installs. Call this once per thread (once on the main
  * thread, once per Worker) that will be a Writer or Reader.
- * @param {string} wasmUrl
+ * @param {string|URL} wasmUrl
  * @returns {Promise<object>}
  */
 export async function loadShmring(wasmUrl) {

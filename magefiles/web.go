@@ -83,6 +83,35 @@ func (Web) Clean() error {
 	return sh.Rm(wasmOut)
 }
 
+// Npm namespace assembles the publishable npm package under npm/.
+type Npm mg.Namespace
+
+// Build compiles shmring.wasm and copies it plus shmring.js/wasm_exec.js
+// into npm/, alongside the package.json/README.md checked into the repo.
+// Run this before `npm publish` (from within npm/); the copied files are
+// gitignored so the checked-in web/ sources stay the single copy in git.
+func (n Npm) Build() error {
+	mg.Deps(Web.Build)
+	if err := sh.Copy(filepath.Join("npm", "shmring.wasm"), wasmOut); err != nil {
+		return err
+	}
+	if err := sh.Copy(filepath.Join("npm", "shmring.js"), filepath.Join("web", "shmring.js")); err != nil {
+		return err
+	}
+	return sh.Copy(filepath.Join("npm", "wasm_exec.js"), filepath.Join("web", "wasm_exec.js"))
+}
+
+// Clean removes npm/'s generated (gitignored) files, leaving package.json
+// and README.md in place.
+func (Npm) Clean() error {
+	for _, f := range []string{"shmring.wasm", "shmring.js", "wasm_exec.js"} {
+		if err := sh.Rm(filepath.Join("npm", f)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func waitForServer(url string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

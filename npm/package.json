@@ -1,0 +1,36 @@
+{
+  "name": "shmring",
+  "version": "0.1.0",
+  "description": "Cross-thread/cross-tab shared-memory ring buffer for the browser (SharedArrayBuffer-backed), compiled from the same Go source as the native and Android backends",
+  "type": "module",
+  "main": "shmring.js",
+  "exports": {
+    ".": "./shmring.js"
+  },
+  "files": [
+    "shmring.js",
+    "wasm_exec.js",
+    "shmring.wasm",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gofsd/shmring.git",
+    "directory": "web"
+  },
+  "homepage": "https://github.com/gofsd/shmring#web",
+  "bugs": "https://github.com/gofsd/shmring/issues",
+  "license": "MIT",
+  "keywords": [
+    "shared-memory",
+    "ring-buffer",
+    "wasm",
+    "webassembly",
+    "sharedarraybuffer",
+    "worker"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -24,8 +24,46 @@ via `gomobile`).
 
 ## Install
 
+**Go (desktop: Linux, macOS, Windows):**
+
 ```sh
-go get github.com/gofsd/shmring
+go get github.com/gofsd/shmring@v0.1.0
+```
+
+**Gradle (Android)** — the AAR is attached to each [GitHub
+release](https://github.com/gofsd/shmring/releases) rather than published to
+a Maven registry, so it resolves via a plain HTTP(S) `ivy` repository (no
+account/token needed to consume it):
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        exclusiveContent {
+            forRepository {
+                ivy {
+                    url = uri("https://github.com/gofsd/shmring/releases/download")
+                    patternLayout { artifact("[revision]/[module]-[revision].[ext]") }
+                    metadataSources { artifact() }
+                }
+            }
+            filter { includeModule("dev.gofsd", "shmring") }
+        }
+    }
+}
+```
+
+```kotlin
+// app/build.gradle.kts
+dependencies {
+    implementation("dev.gofsd:shmring:v0.1.0@aar")
+}
+```
+
+**npm (web):**
+
+```sh
+npm install shmring
 ```
 
 ## Quick start
@@ -78,9 +116,14 @@ relies on, not weaker.
 JS idiom allows. See [`web/example`](web/example) for a working
 main-thread-Writer / Worker-Reader page.
 
+Published to npm as [`shmring`](https://www.npmjs.com/package/shmring)
+(`npm install shmring`) — see [npm/README.md](npm/README.md) for
+package-specific usage. To build it from source instead:
+
 ```sh
 mage web:build            # -> web/example/shmring.wasm
 mage web:serve             # http://localhost:8080/example/
+mage npm:build             # -> npm/ (shmring.js, wasm_exec.js, shmring.wasm)
 ```
 
 **Requires cross-origin isolation.** Browsers only expose
@@ -171,6 +214,11 @@ export ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/28.2.13676358
 
 mage android:build   # -> bin/android/shmring.aar
 ```
+
+Prebuilt AARs are attached to [GitHub
+releases](https://github.com/gofsd/shmring/releases) — see [Install](#install)
+for the Gradle `ivy` repository snippet, no local NDK/gomobile build needed
+to just depend on it.
 
 ### Verification status
 
