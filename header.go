@@ -3,7 +3,7 @@ package shmring
 import (
 	"encoding/binary"
 
-	"github.com/madi/shmring/backend"
+	"github.com/gofsd/shmring/backend"
 )
 
 // Storage layout (all fields little-endian):

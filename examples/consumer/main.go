@@ -11,7 +11,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/madi/shmring"
+	"github.com/gofsd/shmring"
 )
 
 func main() {

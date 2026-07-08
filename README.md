@@ -25,7 +25,7 @@ via `gomobile`).
 ## Install
 
 ```sh
-go get github.com/madi/shmring
+go get github.com/gofsd/shmring
 ```
 
 ## Quick start

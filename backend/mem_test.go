@@ -4,7 +4,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/madi/shmring/backend"
+	"github.com/gofsd/shmring/backend"
 )
 
 func TestMemStorageReadWriteRoundTrip(t *testing.T) {

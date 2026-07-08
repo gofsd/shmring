@@ -2,7 +2,7 @@
 
 package shmring
 
-import "github.com/madi/shmring/backend"
+import "github.com/gofsd/shmring/backend"
 
 // CreateAndroidSharedMemory creates a new ASharedMemory-backed ring buffer
 // and returns the Writer plus the underlying file descriptor. Unlike

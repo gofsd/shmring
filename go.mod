@@ -1,4 +1,4 @@
-module github.com/madi/shmring
+module github.com/gofsd/shmring
 
 go 1.25.0
 

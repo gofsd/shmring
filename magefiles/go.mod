@@ -1,4 +1,4 @@
-module github.com/madi/shmring/magefiles
+module github.com/gofsd/shmring/magefiles
 
 go 1.23
 

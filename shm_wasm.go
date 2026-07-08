@@ -5,7 +5,7 @@ package shmring
 import (
 	"syscall/js"
 
-	"github.com/madi/shmring/backend"
+	"github.com/gofsd/shmring/backend"
 )
 
 // CreateSharedArrayBuffer allocates a new JavaScript SharedArrayBuffer

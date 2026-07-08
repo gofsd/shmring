@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/madi/shmring/backend"
+	"github.com/gofsd/shmring/backend"
 )
 
 // Reader is the consumer side of a ring buffer. A Reader must only be used

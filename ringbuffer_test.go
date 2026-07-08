@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/madi/shmring"
-	"github.com/madi/shmring/backend"
+	"github.com/gofsd/shmring"
+	"github.com/gofsd/shmring/backend"
 )
 
 // newPair builds a Writer/Reader pair sharing one in-process MemStorage, so

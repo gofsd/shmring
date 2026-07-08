@@ -36,7 +36,7 @@
 // or a working emulator; see the Android section of the README for how.
 package mobile
 
-import "github.com/madi/shmring"
+import "github.com/gofsd/shmring"
 
 // Writer is the producer side of a ring buffer.
 type Writer struct {

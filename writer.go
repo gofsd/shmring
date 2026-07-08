@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/madi/shmring/backend"
+	"github.com/gofsd/shmring/backend"
 )
 
 // Writer is the producer side of a ring buffer. A Writer must only be used

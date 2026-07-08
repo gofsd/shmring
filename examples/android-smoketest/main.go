@@ -25,7 +25,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/madi/shmring"
+	"github.com/gofsd/shmring"
 )
 
 func main() {

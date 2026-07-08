@@ -7,7 +7,7 @@
 // shm_android.go for Android's real backend (ASharedMemory).
 package shmring
 
-import "github.com/madi/shmring/backend"
+import "github.com/gofsd/shmring/backend"
 
 // CreateShm creates a new OS shared-memory segment named name, sized for
 // the given data capacity (a positive power of two), and returns the
