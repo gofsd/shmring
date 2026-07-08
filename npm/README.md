@@ -22,7 +22,7 @@ Cross-Origin-Embedder-Policy: require-corp
 ## Install
 
 ```sh
-npm install shmring
+npm install @gofsd/shmring
 ```
 
 ## Usage
@@ -34,7 +34,7 @@ per Worker).
 **Main thread** (creates the ring, writes into it):
 
 ```js
-import { loadShmring, createWriter, wasmURL } from "shmring";
+import { loadShmring, createWriter, wasmURL } from "@gofsd/shmring";
 
 const raw = await loadShmring(wasmURL);
 const { writer, sab } = createWriter(raw, 4096); // capacity: power of two, bytes
@@ -50,7 +50,7 @@ writer.close(); // signals EOF once the reader drains what's left
 **Worker** (`worker.js`; opens the same ring, reads from it):
 
 ```js
-import { loadShmring, openReader, wasmURL } from "shmring";
+import { loadShmring, openReader, wasmURL } from "@gofsd/shmring";
 
 const readyPromise = loadShmring(wasmURL);
 

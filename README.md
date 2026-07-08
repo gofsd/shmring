@@ -63,7 +63,7 @@ dependencies {
 **npm (web):**
 
 ```sh
-npm install shmring
+npm install @gofsd/shmring
 ```
 
 ## Quick start
@@ -116,8 +116,8 @@ relies on, not weaker.
 JS idiom allows. See [`web/example`](web/example) for a working
 main-thread-Writer / Worker-Reader page.
 
-Published to npm as [`shmring`](https://www.npmjs.com/package/shmring)
-(`npm install shmring`) — see [npm/README.md](npm/README.md) for
+Published to npm as [`@gofsd/shmring`](https://www.npmjs.com/package/@gofsd/shmring)
+(`npm install @gofsd/shmring`) — see [npm/README.md](npm/README.md) for
 package-specific usage. To build it from source instead:
 
 ```sh

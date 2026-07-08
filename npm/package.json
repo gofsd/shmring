@@ -1,6 +1,9 @@
 {
-  "name": "shmring",
+  "name": "@gofsd/shmring",
   "version": "0.1.0",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Cross-thread/cross-tab shared-memory ring buffer for the browser (SharedArrayBuffer-backed), compiled from the same Go source as the native and Android backends",
   "type": "module",
   "main": "shmring.js",
