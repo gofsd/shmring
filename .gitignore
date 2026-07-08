@@ -8,3 +8,4 @@ coverage.txt
 /npm/wasm_exec.js
 /npm/shmring.wasm
 /npm/node_modules/
+.npmrc
