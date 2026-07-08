@@ -66,11 +66,23 @@ func CreateAndroidSharedMemory(debugName string, size int64) (*AndroidSharedMemo
 // for example one received from another goroutine directly, or from
 // Java/Kotlin (via gomobile) after arriving over Binder as a
 // ParcelFileDescriptor from another process.
+//
+// It dup()s fd rather than adopting it directly, so the returned storage's
+// Close is independent of the original fd's owner: across processes, a fd
+// arriving over Binder is already a separate table entry, but a caller
+// reusing the same in-process fd for both CreateAndroidSharedMemory and
+// OpenAndroidSharedMemory (as the package doc's example does) would
+// otherwise hand out two Storages sharing one fd number, and the first
+// Close would leave the second closing an already-closed fd.
 func OpenAndroidSharedMemory(fd int, size int64) (*AndroidSharedMemoryStorage, error) {
 	if size <= 0 {
 		return nil, fmt.Errorf("backend: size must be positive, got %d", size)
 	}
-	return newAndroidSharedMemoryStorage(fd, size)
+	dupFd, err := unix.Dup(fd)
+	if err != nil {
+		return nil, fmt.Errorf("backend: dup fd %d: %w", fd, err)
+	}
+	return newAndroidSharedMemoryStorage(dupFd, size)
 }
 
 func newAndroidSharedMemoryStorage(fd int, size int64) (*AndroidSharedMemoryStorage, error) {

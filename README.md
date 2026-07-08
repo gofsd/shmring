@@ -15,7 +15,7 @@ through the kernel beyond the initial `mmap`.
 | --- | --- | --- |
 | Linux, macOS, Windows | OS shared memory (`hidez8891/shm`, cgo) | native, `CreateShm`/`OpenShm`, CI-tested |
 | Web (browser) | `SharedArrayBuffer` + `Atomics` (Go compiled to `js/wasm`) | native, `CreateSharedArrayBuffer`/`OpenSharedArrayBuffer`, browser-tested — see [Web](#web) |
-| Android | `ASharedMemory` (cgo), fd-based, via `gomobile bind` | compiles against the real NDK and produces a real AAR; **runtime behavior unverified on-device** — see [Android](#android) |
+| Android | `ASharedMemory` (cgo), fd-based, via `gomobile bind` | native, compiles against the real NDK and produces a real AAR, confirmed on a real device — see [Android](#android) |
 
 Same underlying Go source and ring buffer algorithm everywhere; only the
 storage backend and the surface exposed to the host language differ (Go on
@@ -183,16 +183,12 @@ availability error) and link against the real bionic sysroot.
 all four Android ABIs (armeabi-v7a, arm64-v8a, x86, x86_64) plus the
 generated Java bindings shown above.
 
-**Not confirmed:** that `ASharedMemory_create`/`mmap` actually behave
-correctly at runtime on Android. Verifying that needs a device or emulator,
-and two attempts on an AVD (`Pixel_9`, both with and without KVM
-acceleration) ended in the *emulator itself* segfaulting during boot
-(`SIGSEGV`, exit 139) — a crash in QEMU/the emulator, unrelated to this
-library — with no physical device available as a fallback. Until someone
-runs it on a real device or a working emulator, treat Android's runtime
-behavior as unverified. [`examples/android-smoketest`](examples/android-smoketest)
-is a ready-made single-process round-trip check for whoever does that
-next:
+**Confirmed on a real device:** `ASharedMemory_create`/`mmap` behave
+correctly at runtime. Two earlier attempts to verify this on an AVD
+(`Pixel_9`, both with and without KVM acceleration) had ended in the
+*emulator itself* segfaulting during boot (`SIGSEGV`, exit 139) — a crash in
+QEMU/the emulator, unrelated to this library. A physical device (Android 16,
+arm64-v8a) confirmed both the raw backend and the `gomobile`-bound AAR:
 
 ```sh
 CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang \
@@ -200,7 +196,18 @@ CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-and
   go build -o android-smoketest ./examples/android-smoketest
 adb push android-smoketest /data/local/tmp/
 adb shell /data/local/tmp/android-smoketest
+# PASS: wrote and read back "hello from ASharedMemory\n" through real ASharedMemory-backed shared memory
 ```
+
+That run surfaced one real bug, since fixed: `OpenAndroidSharedMemory` used
+to adopt the caller's fd number directly instead of `dup`-ing it. That's
+harmless across processes (a fd arriving over Binder is already a separate
+table entry), but any single-process caller reusing the literal fd for both
+`CreateAndroidSharedMemory` and `OpenAndroidSharedMemory` — exactly the
+pattern this doc and `examples/android-smoketest` show — got two `Storage`s
+sharing one fd number, so the first side's `Close`/`CloseStorage` left the
+other closing an already-closed fd (`EBADF`). `OpenAndroidSharedMemory` now
+dups the fd on entry, so each side owns an independent descriptor.
 
 ## API
 
