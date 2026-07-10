@@ -1,0 +1,18 @@
+[package]
+name = "shmring"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Fixed-capacity, single-producer/single-consumer byte ring buffer over shared memory (same wire format as the Go and JS implementations)"
+repository = "https://github.com/gofsd/shmring"
+homepage = "https://github.com/gofsd/shmring#rust"
+readme = "README.md"
+keywords = ["shared-memory", "ring-buffer", "ipc", "spsc"]
+categories = ["concurrency", "memory-management"]
+
+[lib]
+name = "shmring"
+path = "src/lib.rs"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

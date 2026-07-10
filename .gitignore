@@ -9,3 +9,5 @@ coverage.txt
 /npm/shmring.wasm
 /npm/node_modules/
 .npmrc
+/target/
+/Cargo.lock

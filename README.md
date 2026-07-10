@@ -16,11 +16,14 @@ through the kernel beyond the initial `mmap`.
 | Linux, macOS, Windows | OS shared memory (`hidez8891/shm`, cgo) | native, `CreateShm`/`OpenShm`, CI-tested |
 | Web (browser) | `SharedArrayBuffer` + `Atomics` (Go compiled to `js/wasm`) | native, `CreateSharedArrayBuffer`/`OpenSharedArrayBuffer`, browser-tested — see [Web](#web) |
 | Android | `ASharedMemory` (cgo), fd-based, via `gomobile bind` | native, compiles against the real NDK and produces a real AAR, confirmed on a real device — see [Android](#android) |
+| Rust (Linux, macOS) | OS shared memory (POSIX `shm_open`, direct FFI) | independent implementation of the same wire format, `create_shm`/`open_shm`, confirmed with a real two-process round trip — see [`rust/README.md`](rust/README.md) |
 
-Same underlying Go source and ring buffer algorithm everywhere; only the
-storage backend and the surface exposed to the host language differ (Go on
-desktop, JavaScript on web via generated bindings, Kotlin/Java on Android
-via `gomobile`).
+Same ring buffer wire format everywhere (verified across implementations:
+the Rust crate is a from-scratch port, not generated from the Go source,
+unlike the JS/Android surfaces). The storage backend and the surface
+exposed to the host language differ per platform (Go on desktop, JavaScript
+on web via generated bindings, Kotlin/Java on Android via `gomobile`, Rust
+via its own native `shm_open`-based backend).
 
 ## Install
 
@@ -64,6 +67,13 @@ dependencies {
 
 ```sh
 npm install @gofsd/shmring
+```
+
+**Cargo (Rust, Linux/macOS)** — not yet published to crates.io (planned for
+the next tagged release):
+
+```sh
+cargo add shmring
 ```
 
 ## Quick start
