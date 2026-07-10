@@ -69,8 +69,7 @@ dependencies {
 npm install @gofsd/shmring
 ```
 
-**Cargo (Rust, Linux/macOS)** — not yet published to crates.io (planned for
-the next tagged release):
+**Cargo (Rust, Linux/macOS):**
 
 ```sh
 cargo add shmring
