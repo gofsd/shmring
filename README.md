@@ -30,7 +30,7 @@ via its own native `shm_open`-based backend).
 **Go (desktop: Linux, macOS, Windows):**
 
 ```sh
-go get github.com/gofsd/shmring@v0.1.0
+go get github.com/gofsd/shmring@v0.2.0
 ```
 
 **Gradle (Android)** — the AAR is attached to each [GitHub
@@ -59,7 +59,7 @@ dependencyResolutionManagement {
 ```kotlin
 // app/build.gradle.kts
 dependencies {
-    implementation("dev.gofsd:shmring:v0.1.0@aar")
+    implementation("dev.gofsd:shmring:v0.2.0@aar")
 }
 ```
 
