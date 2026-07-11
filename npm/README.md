@@ -2,11 +2,12 @@
 
 Browser build of [shmring](https://github.com/gofsd/shmring): a
 fixed-capacity, single-producer/single-consumer byte ring buffer, backed
-here by a `SharedArrayBuffer` and compiled from the same Go source that runs
-natively on desktop and Android. One thread (main thread or a Worker)
-creates the ring and gets a `Writer`; another thread opens the same
-`SharedArrayBuffer` and gets a `Reader`. Bytes written on one side become
-readable on the other, in order.
+here by a `SharedArrayBuffer` and compiled via `wasm-bindgen` from the same
+Rust crate ([`shmring` on crates.io](https://crates.io/crates/shmring)) that
+runs natively on desktop. One thread (main thread or a Worker) creates the
+ring and gets a `Writer`; another thread opens the same `SharedArrayBuffer`
+and gets a `Reader`. Bytes written on one side become readable on the
+other, in order.
 
 ## Requirements
 
@@ -71,10 +72,11 @@ self.onmessage = async (e) => {
 };
 ```
 
-`wasmURL` is a `new URL("./shmring.wasm", import.meta.url)` reference;
-bundlers that understand that pattern (Vite, webpack 5+, esbuild) will
-resolve and copy the `.wasm` asset automatically. If yours doesn't, fetch
-`node_modules/shmring/shmring.wasm` yourself and pass that URL/path instead.
+`wasmURL` is a `new URL("./shmring_wasm_bg.wasm", import.meta.url)`
+reference; bundlers that understand that pattern (Vite, webpack 5+, esbuild)
+will resolve and copy the `.wasm` asset automatically. If yours doesn't,
+fetch `node_modules/@gofsd/shmring/shmring_wasm_bg.wasm` yourself and pass
+that URL/path instead.
 
 ## API
 

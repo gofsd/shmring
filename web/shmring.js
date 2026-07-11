@@ -5,87 +5,82 @@
 // async (Promise-returning) since they can genuinely wait for the other
 // side.
 //
+// Compiled from rust/ via wasm-bindgen (see rust/src/wasm_api.rs), not Go
+// -- but this wrapper's public API (loadShmring, wasmURL, Writer, Reader,
+// createWriter, openReader, and every method's call signature) is
+// unchanged, so web/example and web/e2e don't need to know or care.
+//
 // Requires a page/worker that is cross-origin isolated, since
 // SharedArrayBuffer is unavailable otherwise -- see web/example.
 
-import "./wasm_exec.js"; // side effect: defines globalThis.Go
+import init, * as wasmModule from "./shmring_wasm.js";
 
 /**
- * URL of the shmring.wasm binary bundled alongside this module. Bundlers
- * (Vite, webpack, etc.) that understand `new URL(..., import.meta.url)`
+ * URL of the shmring_wasm_bg.wasm binary bundled alongside this module.
+ * Bundlers (Vite, webpack, etc.) that understand `new URL(..., import.meta.url)`
  * asset references will resolve and copy it automatically; otherwise pass
  * your own URL/path to loadShmring instead of this one.
  */
-export const wasmURL = new URL("./shmring.wasm", import.meta.url);
+export const wasmURL = new URL("./shmring_wasm_bg.wasm", import.meta.url);
 
 /**
- * Instantiates shmring.wasm and returns the raw globalThis.shmring
- * bindings it installs. Call this once per thread (once on the main
- * thread, once per Worker) that will be a Writer or Reader.
+ * Instantiates the shmring wasm module and returns its raw bindings
+ * (createWriter/openReader/WasmWriter/WasmReader). Call this once per
+ * thread (once on the main thread, once per Worker) that will be a Writer
+ * or Reader.
  * @param {string|URL} wasmUrl
  * @returns {Promise<object>}
  */
 export async function loadShmring(wasmUrl) {
-  const go = new globalThis.Go();
-  const resp = await fetch(wasmUrl);
-  const { instance } = await WebAssembly.instantiateStreaming(resp, go.importObject);
-  // go.run's Promise only resolves when the Go program's main() returns,
-  // which it never does (see web/wasm/main.go) -- do not await it here.
-  go.run(instance);
-  return globalThis.shmring;
-}
-
-function unwrap({ value, err }) {
-  if (err) throw new Error(err);
-  return value;
+  await init({ module_or_path: wasmUrl });
+  return wasmModule;
 }
 
 export class Writer {
   #raw;
-  #id;
 
-  constructor(raw, id) {
+  constructor(raw) {
     this.#raw = raw;
-    this.#id = id;
   }
 
   /** Non-blocking; returns the number of bytes written (may be less than data.length, or 0 if full). */
   tryWrite(data) {
-    return unwrap(this.#raw.writerTryWrite(this.#id, data)).n;
+    return this.#raw.try_write(data);
   }
 
   /** Blocks (asynchronously, without freezing the page/worker) until all of data is written. */
   async write(data) {
-    return unwrap(await this.#raw.writerWrite(this.#id, data)).n;
+    return await this.#raw.write(data);
   }
 
   /** Marks the ring buffer closed; the Reader observes EOF once it drains what's left. */
   close() {
-    unwrap(this.#raw.writerClose(this.#id));
+    this.#raw.close();
   }
 }
 
 export class Reader {
   #raw;
-  #id;
 
-  constructor(raw, id) {
+  constructor(raw) {
     this.#raw = raw;
-    this.#id = id;
   }
 
-  /** Non-blocking; returns {n, eof}. n may be 0 with eof false if nothing is available yet. */
+  /** Non-blocking; returns {n, eof}. n may be 0 with eof false if nothing is available yet. into is mutated in place. */
   tryRead(into) {
-    return unwrap(this.#raw.readerTryRead(this.#id, into));
+    const { n, eof } = this.#raw.try_read(into);
+    return { n, eof };
   }
 
-  /** Blocks (asynchronously) until at least one byte is available; returns {n, eof}. */
+  /** Blocks (asynchronously) until at least one byte is available; mutates into and returns {n, eof}. */
   async read(into) {
-    return unwrap(await this.#raw.readerRead(this.#id, into));
+    const { data, n, eof } = await this.#raw.read(into.length);
+    if (n > 0) into.set(data);
+    return { n, eof };
   }
 
   close() {
-    unwrap(this.#raw.readerClose(this.#id));
+    this.#raw.close();
   }
 }
 
@@ -97,8 +92,8 @@ export class Reader {
  * @param {number} capacity - power of two, in bytes
  */
 export function createWriter(raw, capacity) {
-  const { writerId, sab } = unwrap(raw.createWriter(capacity));
-  return { writer: new Writer(raw, writerId), sab };
+  const { writer, sab } = raw.createWriter(capacity);
+  return { writer: new Writer(writer), sab };
 }
 
 /**
@@ -109,6 +104,5 @@ export function createWriter(raw, capacity) {
  * @param {number} capacity
  */
 export function openReader(raw, sab, capacity) {
-  const { readerId } = unwrap(raw.openReader(sab, capacity));
-  return new Reader(raw, readerId);
+  return new Reader(raw.openReader(sab, capacity));
 }

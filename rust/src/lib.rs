@@ -37,14 +37,18 @@
 //!
 //! The head/tail coordination between the writer and the reader relies on
 //! plain, naturally aligned 32-bit loads and stores to the shared region
-//! rather than hardware atomics (the [`backend::Storage`] trait only
-//! exposes copy-based `read_at`/`write_at`, not a raw pointer into the
-//! mapping). This is the same assumption classic SPSC ring buffers over
-//! shared memory (e.g. Linux `kfifo`) make, and holds for OS shared memory
+//! by default (see [`backend::Storage::load_u32_at`]/`store_u32_at`), which
+//! is the same assumption classic SPSC ring buffers over shared memory
+//! (e.g. Linux `kfifo`) make, and holds for OS shared memory
 //! (hardware-coherent across processes) and for [`backend::MemStorage`]
-//! (which serializes access with a mutex instead). Do not repurpose the
-//! writer/reader split for anything other than the SPSC pattern it was
-//! designed for.
+//! (which serializes access with a mutex instead). Backends without either
+//! guarantee override those two methods with a real atomic load/store --
+//! see [`backend::SharedArrayBufferStorage`] (compiled for
+//! `wasm32-unknown-unknown` only), used from a browser where two
+//! independent wasm module instances -- typically the main thread and a
+//! Web Worker -- coordinate through a JavaScript `SharedArrayBuffer` and
+//! its `Atomics`. Do not repurpose the writer/reader split for anything
+//! other than the SPSC pattern it was designed for.
 
 mod error;
 mod header;
@@ -63,3 +67,6 @@ pub use writer::Writer;
 mod shm;
 #[cfg(unix)]
 pub use shm::{create_shm, open_shm};
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod wasm_api;

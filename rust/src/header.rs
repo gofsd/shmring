@@ -93,15 +93,16 @@ pub(crate) fn verify_header<S: Storage>(st: &S, capacity: u64) -> Result<()> {
     Ok(())
 }
 
-/// Loads a header word with a plain aligned read. This is sufficient for
-/// backends over hardware-coherent memory (see [`ShmStorage`](crate::backend::ShmStorage)
-/// and [`MemStorage`](crate::backend::MemStorage)'s docs).
+/// Loads a header word via [`Storage::load_u32_at`] -- a plain aligned read
+/// for backends over hardware-coherent memory (see
+/// [`ShmStorage`](crate::backend::ShmStorage) and
+/// [`MemStorage`](crate::backend::MemStorage)'s docs), or a real atomic
+/// load for backends that need one (see
+/// [`SharedArrayBufferStorage`](crate::backend::SharedArrayBufferStorage)).
 pub(crate) fn read_u32_at<S: Storage>(st: &S, off: u64) -> Result<u32> {
-    let mut buf = [0u8; 4];
-    st.read_at(&mut buf, off)?;
-    Ok(u32::from_le_bytes(buf))
+    st.load_u32_at(off)
 }
 
 pub(crate) fn write_u32_at<S: Storage>(st: &S, off: u64, v: u32) -> Result<()> {
-    st.write_at(&v.to_le_bytes(), off)
+    st.store_u32_at(off, v)
 }

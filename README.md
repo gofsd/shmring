@@ -11,19 +11,23 @@ through the kernel beyond the initial `mmap`.
 
 ## Platform support
 
-| Platform | Transport | Status |
-| --- | --- | --- |
-| Linux, macOS, Windows | OS shared memory (`hidez8891/shm`, cgo) | native, `CreateShm`/`OpenShm`, CI-tested |
-| Web (browser) | `SharedArrayBuffer` + `Atomics` (Go compiled to `js/wasm`) | native, `CreateSharedArrayBuffer`/`OpenSharedArrayBuffer`, browser-tested — see [Web](#web) |
-| Android | `ASharedMemory` (cgo), fd-based, via `gomobile bind` | native, compiles against the real NDK and produces a real AAR, confirmed on a real device — see [Android](#android) |
-| Rust (Linux, macOS) | OS shared memory (POSIX `shm_open`, direct FFI) | independent implementation of the same wire format, `create_shm`/`open_shm`, confirmed with a real two-process round trip — see [`rust/README.md`](rust/README.md) |
+| Platform | Language | Transport | Status |
+| --- | --- | --- | --- |
+| Linux, macOS, Windows | Go | OS shared memory (`hidez8891/shm`, cgo) | native, `CreateShm`/`OpenShm`, CI-tested |
+| Android | Go | `ASharedMemory` (cgo), fd-based, via `gomobile bind` | native, compiles against the real NDK and produces a real AAR, confirmed on a real device — see [Android](#android) |
+| Linux, macOS | Rust | OS shared memory (POSIX `shm_open`, direct FFI) | independent implementation of the same wire format, `create_shm`/`open_shm`, confirmed with a real two-process round trip — see [`rust/README.md`](rust/README.md) |
+| Web (browser) | Rust → `wasm-bindgen` | `SharedArrayBuffer` + `Atomics` | same Rust crate as the desktop backend, compiled to `wasm32-unknown-unknown`; confirmed with a real headless-Chrome, cross-thread test — see [Web](#web) |
 
-Same ring buffer wire format everywhere (verified across implementations:
-the Rust crate is a from-scratch port, not generated from the Go source,
-unlike the JS/Android surfaces). The storage backend and the surface
-exposed to the host language differ per platform (Go on desktop, JavaScript
-on web via generated bindings, Kotlin/Java on Android via `gomobile`, Rust
-via its own native `shm_open`-based backend).
+Same ring buffer wire format everywhere (64-byte header, SPSC head/tail
+protocol). Go covers desktop and Android; Rust is an independent
+implementation (not generated from Go) covering desktop and, via
+`wasm-bindgen`, the browser — the web build used to be compiled from Go,
+but was replaced by the Rust build (same functionality, verified end to
+end before the Go wasm code was removed). The storage backend and the
+surface exposed to the host language differ per platform: Go on desktop
+and Android (Kotlin/Java via `gomobile`); Rust on desktop (native
+`shm_open`) and on the web (JavaScript via `wasm-bindgen`-generated
+bindings).
 
 ## Install
 
@@ -108,20 +112,24 @@ go run ./examples/consumer
 
 ## Web
 
-`web/wasm` compiles the same `shmring.Writer`/`Reader` code to WebAssembly
-for use in a browser. Go's `js/wasm` target is single-threaded, so two
-separate WASM instances (e.g. one on the main thread, one in a Web Worker)
-can't literally share Go's linear memory the way two native processes share
-an `mmap`'d segment — instead, the ring buffer's storage lives in a
-JavaScript `SharedArrayBuffer`, and head/tail coordination goes through
-`Atomics.load`/`Atomics.store` (`backend.SharedArrayBufferStorage`, used via
-`shmring.CreateSharedArrayBuffer`/`OpenSharedArrayBuffer`). That's the web
-platform's actual cross-thread visibility guarantee — stronger than the
-"aligned access is coherent" argument the native OS-shared-memory backend
-relies on, not weaker.
+The browser build is compiled from the same [`rust/`](rust) crate as the
+native Rust backend, not from Go — [`rust/src/backend/wasm.rs`](rust/src/backend/wasm.rs)
+implements `Storage` over a JavaScript `SharedArrayBuffer`, and
+[`rust/src/wasm_api.rs`](rust/src/wasm_api.rs) exposes it to JavaScript via
+`wasm-bindgen` (`WasmWriter`/`WasmReader`, `createWriter`/`openReader`).
+Each browser thread (main thread, or a Web Worker) that wants to be one
+side of a ring buffer loads its own independent wasm module instance —
+`wasm32` code is single-threaded, so two instances can't literally share
+linear memory the way two native processes share an `mmap`'d segment.
+Instead, the ring buffer's storage lives in the `SharedArrayBuffer`, and
+head/tail coordination goes through real `Atomics.load`/`Atomics.store`.
+That's the web platform's actual cross-thread visibility guarantee —
+stronger than the "aligned access is coherent" argument the native
+OS-shared-memory backend relies on, not weaker.
 
-`web/shmring.js` is a thin ES module wrapper (`loadShmring`, `Writer`,
-`Reader`, `createWriter`, `openReader`) mirroring the Go API as closely as
+`web/shmring.js` is a thin, hand-written ES module wrapper (`loadShmring`,
+`Writer`, `Reader`, `createWriter`, `openReader`) around the
+`wasm-bindgen`-generated bindings, mirroring the Rust/Go API as closely as
 JS idiom allows. See [`web/example`](web/example) for a working
 main-thread-Writer / Worker-Reader page.
 
@@ -130,9 +138,9 @@ Published to npm as [`@gofsd/shmring`](https://www.npmjs.com/package/@gofsd/shmr
 package-specific usage. To build it from source instead:
 
 ```sh
-mage web:build            # -> web/example/shmring.wasm
-mage web:serve             # http://localhost:8080/example/
-mage npm:build             # -> npm/ (shmring.js, wasm_exec.js, shmring.wasm)
+mage web:build             # -> web/shmring_wasm.js, web/shmring_wasm_bg.wasm, web/example/shmring.wasm
+mage web:serve              # http://localhost:8080/example/
+mage npm:build              # -> npm/ (shmring.js, shmring_wasm.js, shmring_wasm_bg.wasm)
 ```
 
 **Requires cross-origin isolation.** Browsers only expose
@@ -143,16 +151,16 @@ local testing; your production server needs to as well).
 
 ```js
 // main thread
-import { loadShmring, createWriter } from "./shmring.js";
-const raw = await loadShmring("shmring.wasm");
+import { loadShmring, createWriter, wasmURL } from "./shmring.js";
+const raw = await loadShmring(wasmURL);
 const { writer, sab } = createWriter(raw, 4096);
 worker.postMessage({ sab, capacity: 4096 });
 await writer.write(new TextEncoder().encode("hello\n"));
 writer.close();
 
 // worker.js
-import { loadShmring, openReader } from "./shmring.js";
-const raw = await loadShmring("shmring.wasm");
+import { loadShmring, openReader, wasmURL } from "./shmring.js";
+const raw = await loadShmring(wasmURL);
 self.onmessage = async ({ data: { sab, capacity } }) => {
   const reader = openReader(raw, sab, capacity);
   const buf = new Uint8Array(64);
@@ -161,7 +169,7 @@ self.onmessage = async ({ data: { sab, capacity } }) => {
 };
 ```
 
-`mage web:test` builds the wasm module, runs the native test suite, then
+`mage web:test` builds the wasm module, runs the native Go test suite, then
 drives a real headless Chrome (`web/e2e`, via `puppeteer-core`) through the
 example page end to end — confirming actual data crosses the
 main-thread/Worker boundary, not just that things compile. Run
@@ -281,24 +289,27 @@ dups the fd on entry, so each side owns an independent descriptor.
   written is still drained normally); `Writer.CloseStorage` additionally
   releases the OS shared-memory segment and should be called once, by
   whichever side created it, after the other side is done.
-- `CreateSharedArrayBuffer(capacity int64, opts ...Option) (*Writer, js.Value, error)`
-  and `OpenSharedArrayBuffer(sab js.Value, capacity int64, opts ...Option) (*Reader, error)`
-  are the `js/wasm`-only equivalents of `CreateShm`/`OpenShm` (see
-  [Web](#web)); `*Writer`/`*Reader` are otherwise identical.
+
+This is the Go API (desktop/Android only, per the platform table above);
+see [`rust/README.md`](rust/README.md) for the Rust API, which covers both
+desktop and the web build.
 
 ## Design
 
 **Pluggable storage.** The ring buffer algorithm never talks to OS shared
 memory directly — it depends only on the small `backend.Storage` interface
-(`ReadAt`/`WriteAt`/`Size`/`Close`). `CreateShm`/`OpenShm` use
-`backend.ShmStorage`, backed by `hidez8891/shm`; `CreateSharedArrayBuffer`/
-`OpenSharedArrayBuffer` use `backend.SharedArrayBufferStorage`.
+(`ReadAt`/`WriteAt`/`Size`/`Close`), implemented by `backend.ShmStorage`
+(backed by `hidez8891/shm`, used by `CreateShm`/`OpenShm`) and
+`backend.AndroidSharedMemoryStorage` (see [Android](#android)).
 `NewWriter`/`NewReader` accept any `backend.Storage`, including
 `backend.MemStorage`, an in-process byte-slice backend used by this
 package's own tests. This is the extension point for the future: a new
 platform or transport means adding a new `backend.Storage` implementation,
-not touching the ring buffer logic — which is exactly how the web backend
-was added.
+not touching the ring buffer logic — which is exactly how the Android
+backend was added, and how the Rust crate's own `Storage` trait (which
+mirrors this one) added its web backend without touching its own ring
+buffer logic either (see [`rust/README.md`](rust/README.md)'s Design
+section).
 
 **Platform support** is summarized in the table at the top; CI
 (`.github/workflows/ci.yml`) runs the native test suite on Linux, macOS,
@@ -306,25 +317,26 @@ and Windows with `CGO_ENABLED=1` (the underlying `hidez8891/shm` library
 uses cgo).
 
 **Concurrency model.** A ring buffer has exactly one `Writer` and one
-`Reader`, each used from a single goroutine (or, in the browser, thread) at
-a time — this is a single-producer/single-consumer (SPSC) structure, not a
-general-purpose concurrent queue. Head/tail/closed are 32-bit counters
-(`backend.AtomicStorage`, an optional capability) rather than 64-bit, so
-they fit a JavaScript `Int32Array`; correctness only depends on
-`tail-head`, which never approaches 2^31 as long as capacity does (enforced
-at construction). Coordination goes through plain, 4-byte aligned loads and
+`Reader`, each used from a single goroutine at a time — this is a
+single-producer/single-consumer (SPSC) structure, not a general-purpose
+concurrent queue. Head/tail/closed are 32-bit counters rather than 64-bit
+(chosen so the same header format also fits a JavaScript `Int32Array` for
+the Rust web build's `Atomics`); correctness only depends on `tail-head`,
+which never approaches 2^31 as long as capacity does (enforced at
+construction). Coordination goes through plain, 4-byte aligned loads and
 stores on `ShmStorage`/`MemStorage`, because the underlying shm library
 only exposes copy-based `ReadAt`/`WriteAt`, not a raw pointer into the
-mapping. This mirrors how classic SPSC ring buffers over shared memory
-(e.g. Linux `kfifo`) work, and holds on every architecture Go currently
-targets, but it is a weaker guarantee than `sync/atomic` gives within a
-single process — which is exactly why `SharedArrayBufferStorage` does *not*
-take this shortcut, and uses real JavaScript `Atomics` instead (see [Web](#web)).
-The
-in-process `backend.MemStorage` backend compensates for that gap with an
-internal mutex, since two goroutines in one process *do* need a Go
-memory-model-legal happens-before edge, unlike two OS processes sharing
-real mapped memory.
+mapping. `backend.AtomicStorage` is an optional capability a `Storage` can
+implement for backends that need a real atomic load/store instead (Go
+doesn't currently ship one — the browser build now goes through the Rust
+crate's own equivalent `Storage::load_u32_at`/`store_u32_at`, not this
+interface; see [`rust/README.md`](rust/README.md)). Plain aligned access
+mirrors how classic SPSC ring buffers over shared memory (e.g. Linux
+`kfifo`) work, and holds on every architecture Go currently targets. The
+in-process `backend.MemStorage` backend compensates for the weaker
+same-process guarantee with an internal mutex, since two goroutines in one
+process *do* need a Go memory-model-legal happens-before edge, unlike two
+OS processes sharing real mapped memory.
 
 **Blocking calls poll.** There's no cross-process wakeup primitive
 available through shared memory alone, so `Write`/`Read` (and their

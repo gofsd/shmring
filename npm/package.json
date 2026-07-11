@@ -4,7 +4,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Cross-thread/cross-tab shared-memory ring buffer for the browser (SharedArrayBuffer-backed), compiled from the same Go source as the native and Android backends",
+  "description": "Cross-thread/cross-tab shared-memory ring buffer for the browser (SharedArrayBuffer-backed), compiled from the same Rust crate as the native backend via wasm-bindgen",
   "type": "module",
   "main": "shmring.js",
   "exports": {
@@ -12,8 +12,8 @@
   },
   "files": [
     "shmring.js",
-    "wasm_exec.js",
-    "shmring.wasm",
+    "shmring_wasm.js",
+    "shmring_wasm_bg.wasm",
     "README.md"
   ],
   "sideEffects": false,

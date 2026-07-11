@@ -3,11 +3,14 @@
 *.out
 coverage.txt
 /web/example/shmring.wasm
+/web/shmring_wasm.js
+/web/shmring_wasm_bg.wasm
 /web/e2e/node_modules/
 /npm/shmring.js
-/npm/wasm_exec.js
-/npm/shmring.wasm
+/npm/shmring_wasm.js
+/npm/shmring_wasm_bg.wasm
 /npm/node_modules/
+/rust/pkg/
 .npmrc
 /target/
 /Cargo.lock
