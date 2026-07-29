@@ -74,6 +74,17 @@ You don't have to go through the JS bindings, either: a Rust web app
 `backend::SharedArrayBufferStorage` with `Writer::new`/`Reader::new`
 directly, exactly like the native backend.
 
+The JS-facing `WasmWriter::write`/`WasmReader::read` block asynchronously
+(without freezing the page/worker) via `Atomics.waitAsync`, not a fixed
+polling timer: `store_u32_at`'s `Atomics.store` is followed by
+`Atomics.notify` (see `src/backend/wasm.rs`), so the other side's pending
+`waitAsync` promise resolves right away instead of on the next tick of a
+timer. `Atomics.waitAsync` works on both the main thread and a Worker
+(unlike the synchronous `Atomics.wait`, which browsers refuse to run on
+the main thread since it would freeze the page) -- which is exactly why
+it's the primitive used here, since either side of a ring buffer may be
+either kind of thread.
+
 Build and test the JS-facing package with:
 
 ```sh
@@ -151,11 +162,23 @@ plain access is a data race under the JavaScript memory model. That's
 exactly why `SharedArrayBufferStorage` doesn't take this shortcut and uses
 real `Atomics` instead (see [Web](#web)).
 
-**Blocking calls poll.** There's no cross-process wakeup primitive
-available through shared memory alone, so the blocking `Read`/`Write`
-implementations (and `read_timeout`/`write_timeout`) block by polling the
-shared counters with an exponential backoff (tunable via `Options`). Use
-`try_write`/`try_read` if busy-polling isn't acceptable for your use case.
+**Blocking calls wait on a real wakeup where the platform has one.** On
+Linux, the blocking `Read`/`Write` implementations (and
+`read_timeout`/`write_timeout`) block on a real `futex(2)` `FUTEX_WAIT` tied
+to the head/tail word they're waiting on (see `backend::Storage::wait_u32_at`'s
+override in [`backend/shm.rs`](src/backend/shm.rs)), woken by a
+`FUTEX_WAKE` right after the other side's `store_u32_at` updates that word
+-- no busy-polling. `backend::MemStorage` gets the equivalent in-process
+treatment via a `Condvar` instead of a real syscall. On the web,
+`backend::SharedArrayBufferStorage` doesn't implement this trait method at
+all (see [Web](#web) -- the wasm bindings drive their own async wait
+directly via `Atomics.waitAsync`, bypassing `Writer`/`Reader`'s blocking
+methods entirely, since those use `std::thread::sleep` and can't run on a
+wasm32 thread that must never actually block). macOS has no public futex
+equivalent available to this crate, so it keeps the original behavior:
+polling the shared counters with an exponential backoff, tunable via
+`Options`. Either way, use `try_write`/`try_read` if you want to avoid
+blocking (and any polling that implies) entirely.
 
 ## Development
 

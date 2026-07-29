@@ -7,6 +7,8 @@
 //! so support for additional platforms or transports can be added as new
 //! `Storage` implementations without touching the ring buffer algorithm.
 
+use std::time::Duration;
+
 use crate::error::Result;
 
 mod mem;
@@ -66,7 +68,40 @@ pub trait Storage {
 
     /// Stores a little-endian `u32` at `offset`. See
     /// [`load_u32_at`](Storage::load_u32_at) for when to override this.
+    ///
+    /// Implementations that also override [`wait_u32_at`](Storage::wait_u32_at)
+    /// (i.e. that set [`supports_wait`](Storage::supports_wait) to `true`)
+    /// must wake any thread parked in `wait_u32_at` on `offset` after
+    /// storing, the same way a real futex's "wake" side must run after
+    /// its "store" side for the wakeup to actually happen. See
+    /// [`ShmStorage`](crate::backend::ShmStorage)'s Linux implementation
+    /// (a real futex wake) and
+    /// [`SharedArrayBufferStorage`](crate::backend::SharedArrayBufferStorage)'s
+    /// (`Atomics.notify`) for how the two ends pair up.
     fn store_u32_at(&self, offset: u64, value: u32) -> Result<()> {
         self.write_at(&value.to_le_bytes(), offset)
     }
+
+    /// Reports whether [`wait_u32_at`](Storage::wait_u32_at) provides a
+    /// real blocking wait (`true`) or is a no-op stub that returns
+    /// immediately (`false`, the default). [`Writer`](crate::Writer) and
+    /// [`Reader`](crate::Reader) check this once per blocking call to
+    /// decide whether to wait on a real wakeup primitive instead of their
+    /// own sleep-based backoff.
+    fn supports_wait(&self) -> bool {
+        false
+    }
+
+    /// Blocks the calling thread until the `u32` at `offset` no longer
+    /// equals `old`, or `timeout` elapses (`None` means wait
+    /// indefinitely). Always returns eventually for some reason (a real
+    /// change, a spurious wakeup, or a timeout, exactly like a raw
+    /// futex `FUTEX_WAIT`) -- the caller re-reads the word and decides
+    /// what to do next.
+    ///
+    /// Only meaningful when [`supports_wait`](Storage::supports_wait)
+    /// returns `true`; the default implementation here is a no-op that
+    /// returns immediately, which would busy-loop if a caller relied on
+    /// it without checking `supports_wait` first.
+    fn wait_u32_at(&self, _offset: u64, _old: u32, _timeout: Option<Duration>) {}
 }

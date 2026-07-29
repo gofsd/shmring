@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crate::backend::Storage;
 use crate::error::{Error, Result};
 
@@ -105,4 +107,14 @@ pub(crate) fn read_u32_at<S: Storage>(st: &S, off: u64) -> Result<u32> {
 
 pub(crate) fn write_u32_at<S: Storage>(st: &S, off: u64, v: u32) -> Result<()> {
     st.store_u32_at(off, v)
+}
+
+/// How long a `Storage::wait_u32_at` call should block for: unbounded if
+/// there's no deadline (the common case for a plain, indefinitely
+/// blocking `write`/`read`), otherwise capped at the remaining time until
+/// it -- a real wakeup interrupts the wait immediately regardless of this
+/// bound, so it only affects how promptly an already-elapsed deadline is
+/// noticed.
+pub(crate) fn wait_slice(deadline: Option<Instant>) -> Option<Duration> {
+    deadline.map(|d| d.saturating_duration_since(Instant::now()))
 }

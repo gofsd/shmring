@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 use crate::backend::Storage;
 use crate::error::{Error, Result};
 use crate::header::{
-    read_u32_at, validate_capacity, verify_header, write_u32_at, HEADER_SIZE, OFF_CLOSED, OFF_HEAD,
-    OFF_TAIL,
+    read_u32_at, validate_capacity, verify_header, wait_slice, write_u32_at, HEADER_SIZE,
+    OFF_CLOSED, OFF_HEAD, OFF_TAIL,
 };
 use crate::options::Options;
 
@@ -101,6 +101,7 @@ impl<S: Storage> Reader<S> {
     }
 
     fn read_until(&mut self, buf: &mut [u8], deadline: Option<Instant>) -> Result<usize> {
+        let can_wait = self.storage.supports_wait();
         let mut wait = self.options.min_poll;
         loop {
             let n = self.try_read(buf)?;
@@ -112,6 +113,14 @@ impl<S: Storage> Reader<S> {
                     return Err(Error::Timeout);
                 }
             }
+            if can_wait {
+                // Block on a real wakeup tied to OFF_TAIL instead of
+                // sleeping; see Writer::write_until's wait_slice for why
+                // the wait is bounded when there's a deadline.
+                self.storage
+                    .wait_u32_at(OFF_TAIL, self.cached_tail, wait_slice(deadline));
+                continue;
+            }
             std::thread::sleep(wait);
             wait = (wait * 2).min(self.options.max_poll);
         }
@@ -122,6 +131,29 @@ impl<S: Storage> Reader<S> {
     /// the creating writer's `close_storage` does that).
     pub fn close(self) -> Result<()> {
         self.storage.close()
+    }
+
+    /// The last tail value this `Reader` has observed from `storage`
+    /// (refreshed by `try_read` whenever the cached one looked
+    /// insufficient). crate-internal: used by
+    /// [`wasm_api`](crate::wasm_api) to drive `Atomics.waitAsync` on
+    /// `OFF_TAIL` without duplicating the ring buffer's own bookkeeping.
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", target_os = "unknown")),
+        allow(dead_code)
+    )]
+    pub(crate) fn cached_tail(&self) -> u32 {
+        self.cached_tail
+    }
+
+    /// crate-internal accessor to the underlying storage, for the same
+    /// reason as [`cached_tail`](Reader::cached_tail).
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", target_os = "unknown")),
+        allow(dead_code)
+    )]
+    pub(crate) fn storage(&self) -> &S {
+        &self.storage
     }
 }
 
@@ -142,12 +174,17 @@ impl<S: Storage> io::Read for Reader<S> {
         if buf.is_empty() {
             return Ok(0);
         }
+        let can_wait = self.storage.supports_wait();
         let mut wait = self.options.min_poll;
         loop {
             match self.try_read(buf) {
                 Ok(0) => {
-                    std::thread::sleep(wait);
-                    wait = (wait * 2).min(self.options.max_poll);
+                    if can_wait {
+                        self.storage.wait_u32_at(OFF_TAIL, self.cached_tail, None);
+                    } else {
+                        std::thread::sleep(wait);
+                        wait = (wait * 2).min(self.options.max_poll);
+                    }
                 }
                 Ok(n) => return Ok(n),
                 Err(Error::Eof) => return Ok(0),

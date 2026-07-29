@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 use crate::backend::Storage;
 use crate::error::{Error, Result};
 use crate::header::{
-    init_header, read_u32_at, validate_capacity, write_u32_at, HEADER_SIZE, OFF_CLOSED, OFF_HEAD,
-    OFF_TAIL,
+    init_header, read_u32_at, validate_capacity, wait_slice, write_u32_at, HEADER_SIZE, OFF_CLOSED,
+    OFF_HEAD, OFF_TAIL,
 };
 use crate::options::Options;
 
@@ -106,6 +106,7 @@ impl<S: Storage> Writer<S> {
     }
 
     fn write_until(&mut self, buf: &[u8], deadline: Option<Instant>) -> Result<usize> {
+        let can_wait = self.storage.supports_wait();
         let mut written = 0usize;
         let mut wait = self.options.min_poll;
         while written < buf.len() {
@@ -119,6 +120,15 @@ impl<S: Storage> Writer<S> {
                 if Instant::now() >= deadline {
                     return Err(Error::Timeout);
                 }
+            }
+            if can_wait {
+                // Block on a real wakeup tied to OFF_HEAD instead of
+                // sleeping; see wait_slice for why the wait is bounded
+                // when there's a deadline. A real wakeup interrupts this
+                // immediately regardless of that bound.
+                self.storage
+                    .wait_u32_at(OFF_HEAD, self.cached_head, wait_slice(deadline));
+                continue;
             }
             std::thread::sleep(wait);
             wait = (wait * 2).min(self.options.max_poll);
@@ -136,7 +146,36 @@ impl<S: Storage> Writer<S> {
             return Ok(());
         }
         self.closed = true;
-        write_u32_at(&self.storage, OFF_CLOSED, 1)
+        write_u32_at(&self.storage, OFF_CLOSED, 1)?;
+        // A reader blocked in Storage::wait_u32_at watches OFF_TAIL, not
+        // OFF_CLOSED (there's no data to wait for otherwise), so closing
+        // without a final write needs an explicit nudge here. Re-storing
+        // tail's current, unchanged value is a deliberate no-op purely
+        // for store_u32_at's wake-on-store side effect.
+        write_u32_at(&self.storage, OFF_TAIL, self.tail)
+    }
+
+    /// The last head value this `Writer` has observed from `storage`
+    /// (refreshed by `try_write` whenever the cached one looked
+    /// insufficient). crate-internal: used by
+    /// [`wasm_api`](crate::wasm_api) to drive `Atomics.waitAsync` on
+    /// `OFF_HEAD` without duplicating the ring buffer's own bookkeeping.
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", target_os = "unknown")),
+        allow(dead_code)
+    )]
+    pub(crate) fn cached_head(&self) -> u32 {
+        self.cached_head
+    }
+
+    /// crate-internal accessor to the underlying storage, for the same
+    /// reason as [`cached_head`](Writer::cached_head).
+    #[cfg_attr(
+        not(all(target_arch = "wasm32", target_os = "unknown")),
+        allow(dead_code)
+    )]
+    pub(crate) fn storage(&self) -> &S {
+        &self.storage
     }
 
     /// Marks the ring buffer closed (see [`close`](Writer::close)) and
@@ -167,12 +206,17 @@ impl<S: Storage> io::Write for Writer<S> {
         if buf.is_empty() {
             return Ok(0);
         }
+        let can_wait = self.storage.supports_wait();
         let mut wait = self.options.min_poll;
         loop {
             match self.try_write(buf) {
                 Ok(0) => {
-                    std::thread::sleep(wait);
-                    wait = (wait * 2).min(self.options.max_poll);
+                    if can_wait {
+                        self.storage.wait_u32_at(OFF_HEAD, self.cached_head, None);
+                    } else {
+                        std::thread::sleep(wait);
+                        wait = (wait * 2).min(self.options.max_poll);
+                    }
                 }
                 Ok(n) => return Ok(n),
                 Err(Error::Closed) => {

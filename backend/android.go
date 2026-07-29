@@ -11,6 +11,7 @@ import "C"
 
 import (
 	"fmt"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -115,6 +116,20 @@ func (s *AndroidSharedMemoryStorage) WriteAt(p []byte, off int64) (int, error) {
 
 // Size implements Storage.
 func (s *AndroidSharedMemoryStorage) Size() int64 { return s.size }
+
+// Wait implements WaiterStorage using a real futex(2) FUTEX_WAIT on the
+// shared word (see futex_linux.go): s.mem is a genuine mmap of the
+// ASharedMemory region, so it has the stable address futex(2) needs, the
+// same as the desktop Linux ShmStorage. A blocking Write/Read parked here
+// costs no CPU and wakes as soon as the other side calls Wake.
+func (s *AndroidSharedMemoryStorage) Wait(off int64, old uint32, timeout time.Duration) {
+	futexWaitWord(wordAt(s.mem, off), old, timeout)
+}
+
+// Wake implements WaiterStorage via futex(2) FUTEX_WAKE.
+func (s *AndroidSharedMemoryStorage) Wake(off int64) {
+	futexWakeWord(wordAt(s.mem, off))
+}
 
 // Close unmaps the region and closes the file descriptor.
 func (s *AndroidSharedMemoryStorage) Close() error {

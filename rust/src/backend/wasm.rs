@@ -152,10 +152,59 @@ impl Storage for SharedArrayBufferStorage {
         Ok(v as u32)
     }
 
-    /// Implements the atomic store via `Atomics.store`.
+    /// Implements the atomic store via `Atomics.store`, then wakes any
+    /// thread (typically a Web Worker) parked in `Atomics.wait`/
+    /// `Atomics.waitAsync` on this same word via `Atomics.notify` -- a
+    /// cheap no-op if nobody's waiting. This is what lets
+    /// [`wasm_api`](crate::wasm_api)'s async `write`/`read` await a real
+    /// wakeup instead of polling on a fixed timer; see
+    /// [`wait_async`](SharedArrayBufferStorage::wait_async).
     fn store_u32_at(&self, offset: u64, value: u32) -> Result<()> {
         let idx = self.word_index(offset)?;
         Atomics::store(&self.words, idx, value as i32).map_err(|e| js_err("Atomics.store", e))?;
+        Atomics::notify(&self.words, idx).map_err(|e| js_err("Atomics.notify", e))?;
         Ok(())
+    }
+}
+
+impl SharedArrayBufferStorage {
+    /// Starts an `Atomics.waitAsync` for the word at `offset`, bounded by
+    /// `timeout_ms` as a safety net (a real `store_u32_at` elsewhere wakes
+    /// this immediately via `Atomics.notify`, regardless of the timeout).
+    ///
+    /// Returns `None` if the word no longer holds `old` already (the spec
+    /// checks this atomically as part of starting the wait, the same
+    /// compare-on-entry a real futex does -- see
+    /// [`Atomics.waitAsync`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Atomics/waitAsync)),
+    /// in which case the caller should just retry its real condition
+    /// immediately rather than await anything. Otherwise returns
+    /// `Some(promise)`; the promise resolves once notified or once
+    /// `timeout_ms` elapses, whichever comes first -- like a real futex
+    /// wait, resolving does not by itself mean the word actually changed,
+    /// only that it's worth checking again.
+    ///
+    /// wasm-only (`Atomics.waitAsync` doesn't exist off the web platform)
+    /// and crate-internal: [`wasm_api`](crate::wasm_api) is the only
+    /// caller, reaching in via
+    /// [`Writer::storage`](crate::Writer::storage)/[`Reader::storage`](crate::Reader::storage).
+    pub(crate) fn wait_async(
+        &self,
+        offset: u64,
+        old: u32,
+        timeout_ms: f64,
+    ) -> Result<Option<js_sys::Promise>> {
+        let idx = self.word_index(offset)?;
+        let outcome = Atomics::wait_async_with_timeout(&self.words, idx, old as i32, timeout_ms)
+            .map_err(|e| js_err("Atomics.waitAsync", e))?;
+        let is_async = js_sys::Reflect::get(&outcome, &wasm_bindgen::JsValue::from_str("async"))
+            .map_err(|e| js_err("Atomics.waitAsync result .async", e))?
+            .as_bool()
+            .unwrap_or(false);
+        if !is_async {
+            return Ok(None);
+        }
+        let value = js_sys::Reflect::get(&outcome, &wasm_bindgen::JsValue::from_str("value"))
+            .map_err(|e| js_err("Atomics.waitAsync result .value", e))?;
+        Ok(Some(js_sys::Promise::from(value)))
     }
 }

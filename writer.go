@@ -112,6 +112,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 // WriteContext is like Write but returns ctx.Err() if ctx is done before
 // all of p has been written.
 func (w *Writer) WriteContext(ctx context.Context, p []byte) (int, error) {
+	waiter, canWait := w.st.(backend.WaiterStorage)
 	written := 0
 	wait := w.opt.minPoll
 	for written < len(p) {
@@ -127,6 +128,15 @@ func (w *Writer) WriteContext(ctx context.Context, p []byte) (int, error) {
 		if err := ctx.Err(); err != nil {
 			return written, err
 		}
+		if canWait {
+			// Block on a real wakeup tied to offHead instead of polling.
+			// The wait is capped at maxPoll (when ctx is cancellable) so
+			// ctx cancellation is still noticed promptly; that cap never
+			// delays a real wakeup, which interrupts Wait immediately
+			// regardless of the timeout passed to it.
+			waiter.Wait(offHead, w.cachedHead, waitSlice(ctx, w.opt.maxPoll))
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return written, ctx.Err()
@@ -139,6 +149,30 @@ func (w *Writer) WriteContext(ctx context.Context, p []byte) (int, error) {
 	return written, nil
 }
 
+// waitSlice returns how long a WaiterStorage.Wait call should block for:
+// indefinitely if ctx can never be cancelled (context.Background(), the
+// common case for the plain Write/Read methods), otherwise capped at cap
+// so an already-cancelled or soon-to-expire ctx is still noticed within
+// that bound.
+func waitSlice(ctx context.Context, cap time.Duration) time.Duration {
+	if ctx.Done() == nil {
+		return 0 // WaiterStorage.Wait treats <= 0 as "wait indefinitely"
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(dl); remaining < cap {
+			if remaining <= 0 {
+				// Deadline already passed; take the shortest real wait
+				// rather than 0, which WaiterStorage.Wait reads as
+				// "indefinitely". The loop's ctx.Err() check catches this
+				// on the next iteration regardless.
+				return time.Nanosecond
+			}
+			return remaining
+		}
+	}
+	return cap
+}
+
 // Close marks the ring buffer as closed. Any data already written remains
 // available for the Reader to drain; once drained, the Reader's Read calls
 // return ErrClosed. Close does not release the underlying storage — call
@@ -149,7 +183,15 @@ func (w *Writer) Close() error {
 		return nil
 	}
 	w.closed = true
-	return writeUint32At(w.st, offClosed, 1)
+	if err := writeUint32At(w.st, offClosed, 1); err != nil {
+		return err
+	}
+	// A Reader blocked in WaiterStorage.Wait watches offTail, not
+	// offClosed (there's no data to wait for otherwise), so closing
+	// without a final write needs an explicit nudge here. Re-writing
+	// tail's current, unchanged value is a deliberate no-op purely for
+	// writeUint32At's wake-after-store side effect.
+	return writeUint32At(w.st, offTail, w.tail)
 }
 
 // CloseStorage closes the underlying storage in addition to marking the

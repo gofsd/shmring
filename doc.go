@@ -1,5 +1,5 @@
 // Package shmring implements a fixed-capacity, single-producer/
-// single-consumer byte ring buffer on top of github.com/hidez8891/shm.
+// single-consumer byte ring buffer over OS shared memory.
 //
 // A ring buffer is created by one side (the producer) with CreateShm and
 // opened by the other side (the consumer) with OpenShm, naming the same OS
@@ -7,11 +7,13 @@
 // Reader in FIFO order, wrapping around the underlying storage as needed.
 //
 // The storage the ring buffer runs on is pluggable (see the backend
-// package): CreateShm/OpenShm use OS shared memory for cross-process use,
+// package): CreateShm/OpenShm use OS shared memory for cross-process use --
+// a direct /dev/shm+mmap implementation on Linux, github.com/hidez8891/shm
+// on macOS/Windows, and ASharedMemory on Android (see CreateAndroidSharedMemory) --
 // while NewWriter/NewReader accept any backend.Storage, which is what makes
 // it possible to run the exact same algorithm over a plain in-process byte
 // slice (backend.MemStorage, handy for tests) or over a future backend for
-// a platform or transport hidez8891/shm doesn't cover yet.
+// a platform or transport not covered yet.
 //
 // # Concurrency model
 //
@@ -23,12 +25,16 @@
 // supported.
 //
 // The head/tail coordination between the Writer and the Reader relies on
-// plain, naturally aligned 64-bit loads and stores to the shared region
-// rather than compiler/hardware-level atomics (the underlying shm library
-// only exposes ReadAt/WriteAt, not a raw pointer into the mapping). This is
-// the same assumption classic SPSC ring buffers over shared memory (e.g.
-// Linux kfifo) make, and holds on every architecture Go currently targets,
-// but it is weaker than the guarantees sync/atomic gives you within a
-// single process. Do not repurpose the Writer/Reader split for anything
-// other than the SPSC pattern it was designed for.
+// plain, naturally aligned loads and stores to the shared region rather
+// than compiler/hardware-level atomics. This is the same assumption
+// classic SPSC ring buffers over shared memory (e.g. Linux kfifo) make,
+// and holds on every architecture Go currently targets, but it is weaker
+// than the guarantees sync/atomic gives you within a single process. Do
+// not repurpose the Writer/Reader split for anything other than the SPSC
+// pattern it was designed for.
+//
+// Blocking Write/Read wait on a real OS wakeup where one is available
+// (see backend.WaiterStorage and the README's Design section) rather than
+// polling; on backends without one, they fall back to polling the shared
+// counters with a backoff (see WithPollInterval).
 package shmring

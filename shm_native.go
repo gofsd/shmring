@@ -1,10 +1,12 @@
 //go:build (linux && !android) || darwin || windows
 
 // CreateShm/OpenShm need GOOS=android excluded even though it inherits the
-// "linux" build tag: they call into backend.CreateShm/OpenShm, which are
-// built on hidez8891/shm's POSIX shm_open/shm_unlink -- and Android's
-// bionic libc doesn't implement those (mmap/munmap only). See
-// shm_android.go for Android's real backend (ASharedMemory).
+// "linux" build tag: they call into backend.CreateShm/OpenShm, which rely
+// on POSIX shm_open/shm_unlink semantics (directly on Linux, see
+// backend/shm_linux.go; via hidez8891/shm on macOS/Windows, see
+// backend/shm.go) -- and Android's bionic libc doesn't implement those
+// (mmap/munmap only). See shm_android.go for Android's real backend
+// (ASharedMemory).
 package shmring
 
 import "github.com/gofsd/shmring/backend"

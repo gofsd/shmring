@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::io;
 use std::ptr;
+use std::time::Duration;
 
 use crate::backend::Storage;
 use crate::error::{Error, Result};
@@ -180,6 +181,92 @@ impl Storage for ShmStorage {
         // Cleanup happens in Drop; see the struct docs.
         Ok(())
     }
+
+    /// On Linux, stores the word and wakes any thread parked in
+    /// `wait_u32_at` on `offset` via a real futex wake -- see
+    /// [`supports_wait`](Storage::supports_wait). macOS has no public
+    /// futex equivalent, so it keeps the trait's plain-store default and
+    /// [`wait_u32_at`](Storage::wait_u32_at) stays a no-op there (callers
+    /// fall back to sleep-based polling, unchanged from before).
+    #[cfg(target_os = "linux")]
+    fn store_u32_at(&self, offset: u64, value: u32) -> Result<()> {
+        self.write_at(&value.to_le_bytes(), offset)?;
+        // SAFETY: write_at above already validated offset+4 <= self.size.
+        unsafe { futex_wake(self.word_ptr(offset)) };
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn supports_wait(&self) -> bool {
+        true
+    }
+
+    /// Blocks on a real futex `FUTEX_WAIT` for the word at `offset`. See
+    /// the crate-level docs' Concurrency model section: this is strictly
+    /// better than the plain-aligned-access assumption backing
+    /// `load_u32_at`/`store_u32_at`'s defaults, not a replacement for it
+    /// -- the futex wait itself still only fires after a real store to
+    /// coherent shared memory, per `store_u32_at` above.
+    #[cfg(target_os = "linux")]
+    fn wait_u32_at(&self, offset: u64, old: u32, timeout: Option<Duration>) {
+        if offset + 4 > self.size as u64 {
+            return;
+        }
+        // SAFETY: offset+4 <= self.size was just checked.
+        unsafe { futex_wait(self.word_ptr(offset), old, timeout) };
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ShmStorage {
+    /// SAFETY: caller must ensure `offset + 4 <= self.size` (so the
+    /// resulting pointer addresses 4 in-bounds, 4-byte-aligned bytes --
+    /// true for every offset the ring buffer header defines).
+    unsafe fn word_ptr(&self, offset: u64) -> *mut u32 {
+        self.ptr.add(offset as usize) as *mut u32
+    }
+}
+
+// FUTEX_WAIT/FUTEX_WAKE without FUTEX_PRIVATE_FLAG: the private variants
+// assume the waiter and the waker are the same process (they skip a VM
+// lookup by hashing on the process's mm plus the address), which does not
+// hold here -- ShmStorage's whole point is sharing this word across
+// independent processes. Using the private flag for a cross-process
+// futex is a real, documented bug class (missed wakeups), not just a
+// missed optimization. libc doesn't export these two constants for
+// non-Android Linux targets, so they're defined locally; their values
+// are stable, public kernel UAPI (linux/futex.h).
+#[cfg(target_os = "linux")]
+const FUTEX_WAIT: libc::c_int = 0;
+#[cfg(target_os = "linux")]
+const FUTEX_WAKE: libc::c_int = 1;
+
+/// SAFETY: `word` must point to a valid, 4-byte-aligned `u32` that stays
+/// alive and mapped for the duration of the call (true for any offset
+/// into `ShmStorage`'s mapping, which outlives every `wait_u32_at` call
+/// borrowing `&self`).
+#[cfg(target_os = "linux")]
+unsafe fn futex_wait(word: *mut u32, old: u32, timeout: Option<Duration>) {
+    let ts = timeout.map(|d| libc::timespec {
+        tv_sec: d.as_secs() as libc::time_t,
+        tv_nsec: d.subsec_nanos() as libc::c_long,
+    });
+    let ts_ptr = ts
+        .as_ref()
+        .map_or(ptr::null(), |t| t as *const libc::timespec);
+    // Matches how the Rust standard library itself issues this syscall
+    // (library/std/src/sys/pal/unix/futex.rs): pass `old`/the op code by
+    // value rather than pre-casting to a register-width integer -- LLVM's
+    // C-variadic lowering applies the same default argument promotion a
+    // C compiler would at this call site.
+    libc::syscall(libc::SYS_futex, word, FUTEX_WAIT, old, ts_ptr);
+}
+
+/// SAFETY: see [`futex_wait`].
+#[cfg(target_os = "linux")]
+unsafe fn futex_wake(word: *mut u32) {
+    const WAKE_ALL: libc::c_int = i32::MAX;
+    libc::syscall(libc::SYS_futex, word, FUTEX_WAKE, WAKE_ALL);
 }
 
 impl Drop for ShmStorage {

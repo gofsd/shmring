@@ -118,6 +118,7 @@ func (r *Reader) ReadContext(ctx context.Context, p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
+	waiter, canWait := r.st.(backend.WaiterStorage)
 	wait := r.opt.minPoll
 	for {
 		n, err := r.TryRead(p)
@@ -126,6 +127,13 @@ func (r *Reader) ReadContext(ctx context.Context, p []byte) (int, error) {
 		}
 		if err := ctx.Err(); err != nil {
 			return 0, err
+		}
+		if canWait {
+			// Block on a real wakeup tied to offTail instead of polling;
+			// see Writer.WriteContext for why the wait is capped at
+			// maxPoll rather than skipped for a cancellable ctx.
+			waiter.Wait(offTail, r.cachedTail, waitSlice(ctx, r.opt.maxPoll))
+			continue
 		}
 		select {
 		case <-ctx.Done():

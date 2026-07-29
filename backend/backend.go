@@ -9,7 +9,10 @@
 // implementations without touching the ring buffer algorithm.
 package backend
 
-import "io"
+import (
+	"io"
+	"time"
+)
 
 // Storage is a fixed-size, randomly addressable region of bytes shared
 // between a producer and a consumer. It is the minimal capability the ring
@@ -52,4 +55,27 @@ type AtomicStorage interface {
 	Storage
 	LoadUint32(off int64) (uint32, error)
 	StoreUint32(off int64, v uint32) error
+}
+
+// WaiterStorage is an optional capability a Storage may implement to let a
+// blocking Write/Read sleep on a real OS wakeup primitive tied to one of
+// the ring buffer's header words (head/tail/closed), instead of polling
+// those words with a sleep-based backoff.
+//
+// This is the abstraction real cross-process wakeup primitives (a Linux
+// futex on the shared word, for example) sit behind: Wait blocks the
+// calling goroutine until the word at off no longer holds old, or until
+// timeout elapses (timeout <= 0 means wait indefinitely); Wake wakes any
+// goroutine -- in this process or another -- currently parked in Wait on
+// off. Wait always returns eventually for some reason (real change,
+// spurious wakeup, or timeout); it's the caller's job to re-read the word
+// and decide what to do next, exactly as with a futex.
+//
+// Implementing this is optional: a Storage that doesn't implement it gets
+// the existing sleep-and-poll behavior automatically (see Writer/Reader),
+// which remains correct, just busier while waiting.
+type WaiterStorage interface {
+	Storage
+	Wait(off int64, old uint32, timeout time.Duration)
+	Wake(off int64)
 }

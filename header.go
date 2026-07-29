@@ -107,12 +107,25 @@ func readUint32At(st backend.Storage, off int64) (uint32, error) {
 	return byteOrder.Uint32(buf[:]), nil
 }
 
+// writeUint32At stores a header word and, on backends that implement
+// backend.WaiterStorage, wakes any goroutine blocked waiting for off to
+// change. writeUint32At is only ever called with offHead, offTail or
+// offClosed, so unconditionally waking after every store is exactly the
+// set of wakeups Wait's callers need, with no separate bookkeeping.
 func writeUint32At(st backend.Storage, off int64, v uint32) error {
 	if as, ok := st.(backend.AtomicStorage); ok {
-		return as.StoreUint32(off, v)
+		if err := as.StoreUint32(off, v); err != nil {
+			return err
+		}
+	} else {
+		var buf [4]byte
+		byteOrder.PutUint32(buf[:], v)
+		if _, err := st.WriteAt(buf[:], off); err != nil {
+			return err
+		}
 	}
-	var buf [4]byte
-	byteOrder.PutUint32(buf[:], v)
-	_, err := st.WriteAt(buf[:], off)
-	return err
+	if ws, ok := st.(backend.WaiterStorage); ok {
+		ws.Wake(off)
+	}
+	return nil
 }

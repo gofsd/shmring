@@ -11,12 +11,14 @@ through the kernel beyond the initial `mmap`.
 
 ## Platform support
 
-| Platform | Language | Transport | Status |
-| --- | --- | --- | --- |
-| Linux, macOS, Windows | Go | OS shared memory (`hidez8891/shm`, cgo) | native, `CreateShm`/`OpenShm`, CI-tested |
-| Android | Go | `ASharedMemory` (cgo), fd-based, via `gomobile bind` | native, compiles against the real NDK and produces a real AAR, confirmed on a real device — see [Android](#android) |
-| Linux, macOS | Rust | OS shared memory (POSIX `shm_open`, direct FFI) | independent implementation of the same wire format, `create_shm`/`open_shm`, confirmed with a real two-process round trip — see [`rust/README.md`](rust/README.md) |
-| Web (browser) | Rust → `wasm-bindgen` | `SharedArrayBuffer` + `Atomics` | same Rust crate as the desktop backend, compiled to `wasm32-unknown-unknown`; confirmed with a real headless-Chrome, cross-thread test — see [Web](#web) |
+| Platform | Language | Transport | Blocking wakeup | Status |
+| --- | --- | --- | --- | --- |
+| Linux | Go | OS shared memory (direct `/dev/shm` + `mmap`, pure Go, no cgo) | real `futex(2)` | native, `CreateShm`/`OpenShm`, CI-tested |
+| macOS, Windows | Go | OS shared memory (`hidez8891/shm`, cgo) | polling (no portable futex-like primitive available here) | native, `CreateShm`/`OpenShm`, CI-tested |
+| Android | Go | `ASharedMemory` (cgo), fd-based, via `gomobile bind` | real `futex(2)` (same kernel primitive as Linux) | native, compiles against the real NDK and produces a real AAR, confirmed on a real device — see [Android](#android) |
+| Linux | Rust | OS shared memory (POSIX `shm_open`, direct FFI) | real `futex(2)` | independent implementation of the same wire format, `create_shm`/`open_shm`, confirmed with a real two-process round trip — see [`rust/README.md`](rust/README.md) |
+| macOS | Rust | OS shared memory (POSIX `shm_open`, direct FFI) | polling (no public futex equivalent on macOS) | same as above |
+| Web (browser) | Rust → `wasm-bindgen` | `SharedArrayBuffer` + `Atomics` | `Atomics.wait`/`Atomics.waitAsync`, woken by `Atomics.notify` | same Rust crate as the desktop backend, compiled to `wasm32-unknown-unknown`; confirmed with a real headless-Chrome, cross-thread test — see [Web](#web) |
 
 Same ring buffer wire format everywhere (64-byte header, SPSC head/tail
 protocol). Go covers desktop and Android; Rust is an independent
@@ -299,7 +301,9 @@ desktop and the web build.
 **Pluggable storage.** The ring buffer algorithm never talks to OS shared
 memory directly — it depends only on the small `backend.Storage` interface
 (`ReadAt`/`WriteAt`/`Size`/`Close`), implemented by `backend.ShmStorage`
-(backed by `hidez8891/shm`, used by `CreateShm`/`OpenShm`) and
+(a direct, hand-rolled `/dev/shm` + `mmap` implementation on Linux, see
+[`backend/shm_linux.go`](backend/shm_linux.go); `hidez8891/shm`-backed on
+macOS/Windows, used by `CreateShm`/`OpenShm` on all three) and
 `backend.AndroidSharedMemoryStorage` (see [Android](#android)).
 `NewWriter`/`NewReader` accept any `backend.Storage`, including
 `backend.MemStorage`, an in-process byte-slice backend used by this
@@ -313,8 +317,12 @@ section).
 
 **Platform support** is summarized in the table at the top; CI
 (`.github/workflows/ci.yml`) runs the native test suite on Linux, macOS,
-and Windows with `CGO_ENABLED=1` (the underlying `hidez8891/shm` library
-uses cgo).
+and Windows with `CGO_ENABLED=1`. Only macOS and Windows actually need
+cgo here (the `hidez8891/shm`-backed `ShmStorage` they use is a cgo
+package); Linux's own direct `/dev/shm` + `mmap` + futex `ShmStorage` (see
+[`backend/shm_linux.go`](backend/shm_linux.go)) is plain Go and doesn't
+import `hidez8891/shm` at all, so `CGO_ENABLED=1` there is just the
+default, not a requirement.
 
 **Concurrency model.** A ring buffer has exactly one `Writer` and one
 `Reader`, each used from a single goroutine at a time — this is a
@@ -338,11 +346,22 @@ same-process guarantee with an internal mutex, since two goroutines in one
 process *do* need a Go memory-model-legal happens-before edge, unlike two
 OS processes sharing real mapped memory.
 
-**Blocking calls poll.** There's no cross-process wakeup primitive
-available through shared memory alone, so `Write`/`Read` (and their
-`Context` variants) block by polling the shared counters with an
-exponential backoff (tunable via `WithPollInterval`). Use `TryWrite`/
-`TryRead` if busy-polling isn't acceptable for your use case.
+**Blocking calls wait on a real wakeup where the platform has one.** On
+Linux (desktop and Android), `Write`/`Read` (and their `Context` variants)
+block on a real `futex(2)` `FUTEX_WAIT` tied to the head/tail word they're
+waiting on, woken by a `FUTEX_WAKE` from the other side right after it
+updates that word (see `backend.WaiterStorage`,
+[`backend/futex_linux.go`](backend/futex_linux.go)) — no busy-polling, and
+no wakeup latency beyond the syscall itself. On macOS and Windows there's
+no portable equivalent available to this package (no public futex-like
+primitive, and `hidez8891/shm`'s `Memory` type doesn't expose the raw
+mapped pointer one would need), so those two platforms keep the original
+behavior: polling the shared counters with an exponential backoff, tunable
+via `WithPollInterval`. Either way, `WithPollInterval`'s `maxPoll` also
+bounds how promptly a cancellable `Context`'s cancellation is noticed on
+the futex-backed path, since a real wakeup only fires on the other side's
+activity, not on `ctx.Done()`. Use `TryWrite`/`TryRead` if you want to
+avoid blocking (and any polling that implies) entirely.
 
 ## Development
 
