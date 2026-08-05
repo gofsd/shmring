@@ -62,6 +62,12 @@ func CreateShm(name string, size int64) (*ShmStorage, error) {
 
 // OpenShm opens a shared-memory segment previously created with
 // CreateShm. size must match the size the segment was created with.
+//
+// A segment that exists but is not yet that long -- the state CreateShm
+// leaves behind between creating the file and sizing it -- returns an
+// error wrapping ErrIncompleteSegment rather than a Storage. A consumer
+// racing a producer should treat that as "not ready yet" and retry; see
+// mapShm for why it cannot be mapped and read anyway.
 func OpenShm(name string, size int64) (*ShmStorage, error) {
 	if err := validateShmSize(size); err != nil {
 		return nil, err
@@ -101,6 +107,33 @@ func validateShmSize(size int64) error {
 }
 
 func mapShm(f *os.File, path string, size int64, owns bool) (*ShmStorage, error) {
+	// mmap creates a mapping that runs past end-of-file without
+	// complaining; the fault only arrives later, when something touches a
+	// page beyond the file's last one, and on Linux that fault is SIGBUS
+	// (BUS_ADRERR). Go reports it as "fatal error: fault" and the process
+	// dies -- there is no error to return and nothing to recover from, so
+	// a short file has to be caught here rather than at the first read.
+	//
+	// A file can be short two ways. CreateShm opens with O_CREATE and
+	// only then Truncates to size, so a consumer opening in between sees
+	// a zero-length segment -- which is precisely what a retry-until-it-
+	// exists open loop does, since the file appearing is the event it
+	// waits for. And a segment created with a smaller capacity than the
+	// one being opened is short in the same way, just further in.
+	info, err := f.Stat()
+	if err != nil {
+		if owns {
+			os.Remove(path)
+		}
+		return nil, fmt.Errorf("backend: stat %q: %w", path, err)
+	}
+	if info.Size() < size {
+		if owns {
+			os.Remove(path)
+		}
+		return nil, fmt.Errorf("backend: %q holds %d bytes, need %d: %w", path, info.Size(), size, ErrIncompleteSegment)
+	}
+
 	mem, err := unix.Mmap(int(f.Fd()), 0, int(size), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED)
 	if err != nil {
 		if owns {

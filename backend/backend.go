@@ -10,9 +10,22 @@
 package backend
 
 import (
+	"errors"
 	"io"
 	"time"
 )
+
+// ErrIncompleteSegment is returned, wrapped, when a named shared-memory
+// segment exists but is smaller than the mapping being asked for -- most
+// often because its creator has not finished sizing it yet. It is a
+// transient condition for a consumer that opens a segment concurrently
+// with its producer, and the only way such a consumer can tell "come back
+// in a moment" apart from a segment that will never be right.
+//
+// Only the Linux backend reports it: it maps /dev/shm files itself and so
+// can see their true length. The macOS/Windows backend goes through
+// github.com/hidez8891/shm, which does not expose one.
+var ErrIncompleteSegment = errors.New("backend: shared memory segment is smaller than the requested mapping")
 
 // Storage is a fixed-size, randomly addressable region of bytes shared
 // between a producer and a consumer. It is the minimal capability the ring

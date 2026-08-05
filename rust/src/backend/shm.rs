@@ -50,8 +50,40 @@ impl ShmStorage {
         CString::new(full).map_err(|e| Error::Io(io::Error::new(io::ErrorKind::InvalidInput, e)))
     }
 
+    /// Maps `size` bytes of `fd`, refusing to map more than the segment
+    /// behind `fd` actually holds.
+    ///
+    /// That check is not defensive: mmap creates a mapping running past
+    /// end-of-file without complaining, and the fault only arrives when
+    /// something touches a page beyond the last one the segment really
+    /// has. On Linux that fault is SIGBUS (BUS_ADRERR), which aborts the
+    /// process -- there is no `Err` to return at that point and nothing
+    /// to unwind, so the size has to be established here.
+    ///
+    /// A segment can be short two ways. [`ShmStorage::create`] shm_opens
+    /// before it ftruncates, so a consumer opening in between sees a
+    /// zero-length one -- precisely what a retry-until-it-exists open
+    /// loop does, since the segment appearing is the event it waits for.
+    /// And a segment created with a smaller capacity than the one being
+    /// opened is short the same way, just further in. Both come back as
+    /// [`io::ErrorKind::UnexpectedEof`], which a consumer racing a
+    /// producer should read as "not ready yet" and retry.
     fn map(fd: i32, size: usize) -> io::Result<*mut u8> {
         unsafe {
+            let mut st: libc::stat = std::mem::zeroed();
+            if libc::fstat(fd, &mut st) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if (st.st_size as u64) < size as u64 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!(
+                        "shared memory segment holds {} bytes, need {size}",
+                        st.st_size
+                    ),
+                ));
+            }
+
             let ptr = libc::mmap(
                 ptr::null_mut(),
                 size,
@@ -276,6 +308,63 @@ impl Drop for ShmStorage {
             if self.owns {
                 libc::shm_unlink(self.name.as_ptr());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `open` must never map more of a segment than the segment actually
+    /// holds.
+    ///
+    /// mmap creates a mapping past end-of-file without complaining; the
+    /// fault arrives later, when something touches a page beyond the
+    /// file's last one, and on Linux that fault is SIGBUS (BUS_ADRERR) --
+    /// which aborts the process outright. There is no `Err` to return by
+    /// then and nothing to unwind, so a short segment has to be rejected
+    /// before the mapping is made.
+    ///
+    /// `create` shm_opens with `O_CREAT | O_EXCL` and only then
+    /// `ftruncate`s, so a consumer opening in that window sees a
+    /// zero-length segment -- which is exactly what a retry-until-it-
+    /// exists open loop does, since the segment appearing is the event it
+    /// waits for. The Go side of this crate had the identical hole, and
+    /// it crashed a real consumer: see
+    /// TestOpenShmRefusesASegmentShorterThanTheMapping.
+    ///
+    /// A regression here does not fail this test, it kills the whole test
+    /// binary with SIGBUS.
+    #[test]
+    fn open_refuses_a_segment_shorter_than_the_mapping() {
+        let name = format!("shmring-rs-partial-open-{}", std::process::id());
+        let cname = ShmStorage::normalize_name(&name).expect("normalize name");
+
+        // The segment as `create` leaves it before its ftruncate:
+        // present, openable, and zero bytes long.
+        unsafe {
+            let fd = libc::shm_open(
+                cname.as_ptr(),
+                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+                0o600,
+            );
+            assert!(fd >= 0, "shm_open: {}", io::Error::last_os_error());
+            libc::close(fd);
+        }
+
+        let opened = ShmStorage::open(&name, 4096);
+
+        unsafe {
+            libc::shm_unlink(cname.as_ptr());
+        }
+
+        match opened {
+            Err(Error::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {}
+            Err(e) => panic!("open failed, but not in a way a consumer can recognize as \"not ready yet\": {e}"),
+            Ok(_) => panic!(
+                "open mapped 4096 bytes of a zero-length segment; every byte past the end of it is a SIGBUS waiting to happen"
+            ),
         }
     }
 }
